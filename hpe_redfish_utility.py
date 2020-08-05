@@ -235,7 +235,7 @@ exclusiveParser.add_argument('-pv', "--show-pv", action='store_true', help="Show
 
 exclusiveParser.add_argument('-s', "--status", action='store_true', help="Show power status of server")
 exclusiveParser.add_argument('-r', "--reset", choices=['on', 'off', 'force-reset'], help="Reset the power option")
-exclusiveParser.add_argument("--show-boot", action='store_true', help="Show Boot Order"")
+exclusiveParser.add_argument("--show-boot", action='store_true', help="Show Boot Order")
 
 myargs = parser.parse_args()
 
