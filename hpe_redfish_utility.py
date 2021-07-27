@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 import argparse
 import sys
 import os
@@ -37,7 +35,7 @@ class HpeLogicalVolume(object):
         iloInfo = self.redfishObj.get('/redfish/v1/Systems/1/')
         return iloInfo.obj["Oem"]["Hpe"]['PostState']
 
-    
+
     def isBiosLock(self):
         postState = self.getPostState()
         print("Post State : {}".format(postState))
@@ -68,7 +66,48 @@ class HpeLogicalVolume(object):
 
 
     def logicalDrives(self):
-        smartConfigInfo = self.redfishObj.get('/redfish/v1/Systems/1/smartstorageconfig/')
+        arrayControllers = self.redfishObj.get('/redfish/v1/Systems/1/SmartStorage/ArrayControllers')
+
+        self.logicalDrivesInfo = []
+        for controller in arrayControllers.obj["Members"]:
+            arrayResponse = self.redfishObj.get(controller["@odata.id"])
+            if arrayResponse.status != 200:
+                print(f"Failed to read Storage array information for controller {controller['@odata.id']}")
+                continue
+
+            arrayName = arrayResponse.obj["Name"]
+            arrayModel = arrayResponse.obj["Model"]
+            arrayLocation = arrayResponse.obj["Location"]
+            lgDriveList = self.redfishObj.get(arrayResponse.obj["Links"]["LogicalDrives"]["@odata.id"])
+
+            for lgDriveUri in lgDriveList.obj["Members"]:
+                lgDriveRequest = self.redfishObj.get(lgDriveUri["@odata.id"])
+                if lgDriveRequest.status != 200:
+                    print(f"Failed to read logical drive information for {lgDriveUri['@odata.id']}")
+                    continue
+
+                drive ={}
+                lgDrive = lgDriveRequest.obj
+
+                drive["LogicalDriveName"] = lgDrive["LogicalDriveName"]
+                drive["LogicalDriveNumber"] = lgDrive["LogicalDriveNumber"]
+                drive["capacityGiB"] = int(lgDrive["CapacityMiB"]/1024)
+                drive["raidLevel"] = lgDrive["Raid"]
+                drive["driveID"] = lgDrive["VolumeUniqueIdentifier"]
+
+                drive["dataDrives"] = []
+
+                phyDriveList = self.redfishObj.get(lgDrive["Links"]["DataDrives"]["@odata.id"])
+                for phyDriveUri in phyDriveList.obj["Members"]:
+                    phyDriveRequest = self.redfishObj.get(phyDriveUri["@odata.id"])
+                    if phyDriveRequest.status != 200:
+                        print(f"Failed to read physical drive information for {phyDriveUri['@odata.id']}")
+                        continue
+
+                    drive["dataDrives"].append(phyDriveRequest.obj["Location"])
+                self.logicalDrivesInfo.append(drive)
+
+        """
         self.logicalDrivesInfo = []
         for lgDrive in smartConfigInfo.obj["LogicalDrives"]:
             drive ={}
@@ -79,20 +118,22 @@ class HpeLogicalVolume(object):
             drive["driveID"] = lgDrive["VolumeUniqueIdentifier"]
 
             self.logicalDrivesInfo.append(drive)
+        """
+
 
     def displayLogicalDrives(self):
         self.logicalDrives()
-        
+
         if not self.logicalDrivesInfo:
             print ("\nNo logicals drives present in this system\n")
             return
 
         print()
-        fmt = '{:<20}{:<20}{:<15}{:<35}'
-        print(fmt.format('LogicalNumber', 'Capacity', 'Raid', 'VolumeID'), 'DriveLocation')
-        print("-" * 110)
+        fmt = '{:<20}{:<20}{:<15}{:<10}{:<35}'
+        print(fmt.format('LogicalNumber', "LogicalDriveName", 'Capacity', 'Raid', 'VolumeID'), 'DriveLocation')
+        print("-" * 120)
         for drive in self.logicalDrivesInfo:
-            print(fmt.format(drive['LogicalDriveNumber'], drive['capacityGiB'], drive['raidLevel'], drive['driveID']), drive['dataDrives'])
+            print(fmt.format(drive['LogicalDriveNumber'], drive["LogicalDriveName"], drive['capacityGiB'], drive['raidLevel'], drive['driveID']), drive['dataDrives'])
         print()
 
     def physicalDrives(self):
@@ -115,7 +156,7 @@ class HpeLogicalVolume(object):
 
     def displayPhysicaldrives(self):
         self.physicalDrives()
-        
+
         if not self.driveInfos:
             print ("\nNo physical drives present in this system\n")
             return
@@ -137,19 +178,39 @@ class HpeLogicalVolume(object):
             print("{0: <25} : {1: <100}".format(i["StructuredBootString"], i['BootString']))
         print("")
 
-    
+    def getDetails(self, uri):
+         completeList = []
+         for member in self.redfishObj.get(uri).obj["Members"]:
+             memberDetails = self.redfishObj.get(member["@odata.id"])
+             completeList.append(memberDetails.obj)
+         return completeList
+
+    def returnStorageInfo(self):
+        arrayControllers = []
+        for controller in self.redfishObj.get('/redfish/v1/Systems/1/SmartStorage/ArrayControllers').obj["Members"]:
+
+            controllerData = self.redfishObj.get(controller["@odata.id"]).obj
+            controllerData["LogicalDrives"] = self.getDetails(controllerData["Links"]["LogicalDrives"]["@odata.id"])
+            controllerData["StorageEnclosures"] = self.getDetails(controllerData["Links"]["StorageEnclosures"]["@odata.id"])
+            controllerData["PhysicalDrives"] = self.getDetails(controllerData["Links"]["PhysicalDrives"]["@odata.id"])
+            controllerData["UnconfiguredDrives"] = self.getDetails(controllerData["Links"]["UnconfiguredDrives"]["@odata.id"])
+
+            arrayControllers.append(controllerData)
+        print(json.dumps(arrayControllers, indent=2))
+
     def createLG(self):
         print("\n\n Displaying physical drive Info\n")
         self.displayPhysicaldrives()
 
         logicalCapacity = input("Enter Capcity Info: ")
         driveTechnology = input("Choose the drive technology (SASHDD, SATAHDD, SASSSD, SATASSD): ")
+        #raidLevel = input("Choose the Raid level (Raid0, Raid1, Raid5): ")
 
-        raidConfig = "Raid1"
-        #raidConfig = input("Select raid configuration (Raid1, Raid5, Raid10): ")
+        #raidConfig = "Raid0"
+        raidConfig = input("Select raid configuration (Raid1, Raid5, Raid0): ")
 
         unassignedDrives = []
-      
+
         for drive in self.driveInfos:
             if drive.get('InterfaceType') in driveTechnology and \
                drive.get('MediaType') in driveTechnology and \
@@ -164,6 +225,7 @@ class HpeLogicalVolume(object):
 
         print("\nList of unassigned drives {} \n".format(unassignedDrives))
         RaidMin = {
+            "Raid0": 1,
             "Raid1": 2,
             "Raid5": 3,
             "Raid10": 4
@@ -177,7 +239,7 @@ class HpeLogicalVolume(object):
 
         logicalDrive = {}
         logicalDrive["LogicalDriveName"] = "LogicalDrive_Hpe"
-        logicalDrive["Raid"] = raidConfig
+        logicalDrive["Raid"] = raidConfig.capitalize()
         logicalDrive["DataDrives"] = unassignedDrives[:RaidMin[raidConfig]]
         logicalDriveReqData["LogicalDrives"].append(logicalDrive)
 
@@ -193,7 +255,7 @@ class HpeLogicalVolume(object):
             self.resetPower("on")
         else:
             self.resetPower("force-reset")
-         
+
     def deleteLG(self):
         print("\n\n Displaying logical drive Info\n")
         self.displayLogicalDrives()
@@ -202,6 +264,7 @@ class HpeLogicalVolume(object):
         logicalDriveReqData["DataGuard"] = "Disabled"
         logicalDriveReqData["LogicalDrives"] = []
 
+        dummyinput = input("Delete will remove all logical drives")
         smartConfigDeleteSetting = self.redfishObj.put('/redfish/v1/Systems/1/smartstorageconfig/settings', body=logicalDriveReqData)
 
         if smartConfigDeleteSetting.status != 200:
@@ -213,7 +276,7 @@ class HpeLogicalVolume(object):
             self.resetPower("on")
         else:
             self.resetPower("force-reset")
-         
+
     def getLogicalDriveFromDisk(self, logicalDriveList, phydrive):
         lgDrive = [x for x in logicalDriveList if phydrive in x["DataDrives"]]
 
@@ -236,6 +299,7 @@ exclusiveParser.add_argument('-pv', "--show-pv", action='store_true', help="Show
 exclusiveParser.add_argument('-s', "--status", action='store_true', help="Show power status of server")
 exclusiveParser.add_argument('-r', "--reset", choices=['on', 'off', 'force-reset'], help="Reset the power option")
 exclusiveParser.add_argument("--show-boot", action='store_true', help="Show Boot Order")
+exclusiveParser.add_argument('-ts', "--test-show", action='store_true', help="Show Boot Order")
 
 myargs = parser.parse_args()
 
@@ -251,9 +315,12 @@ elif myargs.show_pv:
     redfishObj.displayPhysicaldrives()
 elif myargs.show_boot:
     redfishObj.displayBootdrives()
+elif myargs.test_show:
+    redfishObj.returnStorageInfo()
 elif myargs.status:
     status = redfishObj.getPowerStatus()
     print("\nNode is currently powered {}\n".format(status))
 elif myargs.reset:
     redfishObj.resetPower(myargs.reset)
     print("\nSystem power is succssfully resetted to {}\n".format(myargs.reset))
+
